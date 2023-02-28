@@ -1,6 +1,6 @@
 # Factory Bot
 
-[![Build Status](https://travis-ci.org/shurikk/go-factorybot.svg)](https://travis-ci.org/shurikk/go-factorybot)
+[![test](https://github.com/shurikk/go-factorybot/workflows/test/badge.svg?branch=master)](https://github.com/shurikk/go-factorybot/actions?query=workflow%3Atest+branch%3Amaster)
 
 Basic factory bot to generate complext stucts in tests
 
