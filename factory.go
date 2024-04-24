@@ -5,44 +5,42 @@ import (
 	"reflect"
 )
 
-// Factory ...
 type Factory struct {
-	Struct                interface{}
-	AfterBuildCallbacks   []func(m interface{})
-	BeforeCreateCallbacks []func(m interface{})
-	AfterCreateCallbacks  []func(m interface{})
-	Fields                map[string]func(f *Factory) interface{}
-	Traits                map[string]func(m interface{})
-	TraitsToProcess       []string
-	PersistCallback       func(m interface{})
+	Struct                any
+	AfterBuildCallbacks   []func(m any)
+	BeforeCreateCallbacks []func(m any)
+	AfterCreateCallbacks  []func(m any)
+	Fields                map[string]func(f *Factory) any
+	Traits                map[string]func(m any)
+	traitsToProcess       []string
+	persistCallback       func(m any)
 }
 
-// Build ...
-func (f *Factory) Build() interface{} {
+// Build creates a struct instance according to defined factory behavior without persisting it.
+func (f *Factory) Build() any {
 	m := f.build()
-	f.processTraits(m)
-	return m.Interface()
+	return m.Addr().Interface()
 }
 
-// Create ...
-func (f *Factory) Create() interface{} {
+// Create creates a struct instance according to defined factory behavior and persists it
+// using callback set by `Persist()`.
+func (f *Factory) Create() any {
 	m := f.create()
-	f.processTraits(m)
-	return m.Interface()
+	return m.Addr().Interface()
 }
 
-// BuildList ...
-func (f *Factory) BuildList(count int, params ...interface{}) interface{} {
+// BuildList creates a list of struct instances according to defined factory behavior without persisting them.
+func (f *Factory) BuildList(count int) any {
 	return f.processList(count, "build")
 }
 
-// CreateList ...
-func (f *Factory) CreateList(count int, params ...interface{}) interface{} {
+// CreateList creates a list of struct instances according to defined factory behavior and persists them
+func (f *Factory) CreateList(count int) any {
 	return f.processList(count, "create")
 }
 
-// Field returns value of a field
-func (f *Factory) Field(name string) interface{} {
+// Field lets developers define a transient field that doesn't belong to the reference struct.
+func (f *Factory) Field(name string) any {
 	if callback, ok := f.Fields[name]; ok {
 		return callback(f)
 	}
@@ -50,11 +48,11 @@ func (f *Factory) Field(name string) interface{} {
 	return nil
 }
 
-// Set ...
-func (f *Factory) Set(name string, callback func(f *Factory) interface{}) *Factory {
+// Set hints the factory how to set the field value.
+func (f *Factory) Set(name string, callback func(f *Factory) any) *Factory {
 	d := *f
 
-	d.Fields = make(map[string]func(f *Factory) interface{})
+	d.Fields = make(map[string]func(f *Factory) any)
 	for k, v := range f.Fields {
 		d.Fields[k] = v
 	}
@@ -63,31 +61,31 @@ func (f *Factory) Set(name string, callback func(f *Factory) interface{}) *Facto
 	return &d
 }
 
-// SetT ...
-func (f *Factory) SetT(name string, value interface{}) *Factory {
+// SetT allows developers to perform one-off overrides while building/creating the strcut instance.
+func (f *Factory) SetT(name string, value any) *Factory {
 	d := *f
 
-	d.Fields = make(map[string]func(f *Factory) interface{})
+	d.Fields = make(map[string]func(f *Factory) any)
 	for k, v := range f.Fields {
 		d.Fields[k] = v
 	}
 
-	d.Fields[name] = func(f *Factory) interface{} { return value }
+	d.Fields[name] = func(f *Factory) any { return value }
 	return &d
 }
 
-// WithTrait ...
+// WithTrait lets developers build/create a struct instance with a specific trait.
 func (f *Factory) WithTrait(name string) *Factory {
 	d := *f
-	d.TraitsToProcess = append(d.TraitsToProcess, name)
+	d.traitsToProcess = append(d.traitsToProcess, name)
 	return &d
 }
 
-// Trait ...
-func (f *Factory) Trait(name string, callback func(m interface{})) *Factory {
+// Trait lets developers define a trait for the factory.
+func (f *Factory) Trait(name string, callback func(m any)) *Factory {
 	d := *f
 
-	d.Traits = make(map[string]func(m interface{}))
+	d.Traits = make(map[string]func(m any))
 	for k, v := range f.Traits {
 		d.Traits[k] = v
 	}
@@ -96,29 +94,30 @@ func (f *Factory) Trait(name string, callback func(m interface{})) *Factory {
 	return &d
 }
 
-// Persist ...
-func (f *Factory) Persist(callback func(m interface{})) *Factory {
+// Persist sets the callback function to be called in order to save/persiste the struct instance.
+func (f *Factory) Persist(callback func(m any)) *Factory {
 	d := *f
-	d.PersistCallback = callback
+	d.persistCallback = callback
 	return &d
 }
 
-// AfterBuild  ...
-func (f *Factory) AfterBuild(callback func(m interface{})) *Factory {
+// AfterBuild sets the callback function to be called after the struct instance is built/initialized.
+func (f *Factory) AfterBuild(callback func(m any)) *Factory {
 	d := *f
 	d.AfterBuildCallbacks = append(d.AfterBuildCallbacks, callback)
 	return &d
 }
 
-// AfterCreate ...
-func (f *Factory) AfterCreate(callback func(m interface{})) *Factory {
+// AfterCreate sets the callback function to be called after the struct instance is created/persisted.
+func (f *Factory) AfterCreate(callback func(m any)) *Factory {
 	d := *f
 	d.AfterCreateCallbacks = append(d.AfterCreateCallbacks, callback)
 	return &d
 }
 
 func (f *Factory) build() reflect.Value {
-	m := reflect.New(reflect.TypeOf(f.Struct).Elem()).Elem()
+	// copy referenced struct
+	m := reflect.New(reflect.ValueOf(f.Struct).Elem().Type()).Elem()
 
 	for field, v := range f.Fields {
 		if m.FieldByName(field).IsValid() {
@@ -126,24 +125,25 @@ func (f *Factory) build() reflect.Value {
 		}
 	}
 
-	defer f.processAfterBuild(m)
+	f.processTraits(m)
+	f.processAfterBuild(m)
 
 	return m
 }
 
 func (f *Factory) create() reflect.Value {
 	m := f.build()
-	defer f.processAfterCreate(m)
 
-	if f.PersistCallback != nil {
-		f.PersistCallback(m.Addr().Interface())
+	if f.persistCallback != nil {
+		f.persistCallback(m.Addr().Interface())
+		defer f.processAfterCreate(m)
 	}
 
 	return m
 }
 
-func (f *Factory) processList(count int, action string) interface{} {
-	t := reflect.TypeOf(f.Struct).Elem()
+func (f *Factory) processList(count int, action string) any {
+	t := reflect.TypeOf(f.Struct)
 	list := reflect.New(reflect.SliceOf(t)).Elem()
 
 	var m reflect.Value
@@ -155,15 +155,14 @@ func (f *Factory) processList(count int, action string) interface{} {
 			m = f.build()
 		}
 
-		f.processTraits(m)
-		list = reflect.Append(list, m)
+		list = reflect.Append(list, m.Addr())
 	}
 
 	return list.Interface()
 }
 
 func (f *Factory) processTraits(m reflect.Value) {
-	for _, traitName := range f.TraitsToProcess {
+	for _, traitName := range f.traitsToProcess {
 		if callback, ok := f.Traits[traitName]; ok {
 			callback(m.Addr().Interface())
 		} else {
@@ -180,7 +179,7 @@ func (f *Factory) processAfterCreate(m reflect.Value) {
 	f.processCallbacks(f.AfterCreateCallbacks, m)
 }
 
-func (f *Factory) processCallbacks(callbacks []func(m interface{}), m reflect.Value) {
+func (f *Factory) processCallbacks(callbacks []func(m any), m reflect.Value) {
 	if len(callbacks) > 0 {
 		for _, callback := range callbacks {
 			callback(m.Addr().Interface())
@@ -188,13 +187,24 @@ func (f *Factory) processCallbacks(callbacks []func(m interface{}), m reflect.Va
 	}
 }
 
-// NewFactory creates new factory
-func NewFactory(s interface{}) *Factory {
+// NewFactory creates new factory instance using the provided struct pointer as a reference.
+//
+//	f := NewFactory(&User{}).
+//		Set("Name", func(f *Factory) interface{} {
+//			return namesSeq.One()
+//		}).
+//		Trait("admin", func(m interface{}) {
+//			x := m.(*User)
+//			x.Admin = true
+//	    })
+//
+//	user := f.Build().(*User)
+func NewFactory(s any) *Factory {
 	return &Factory{
 		Struct:               s,
-		Traits:               make(map[string]func(m interface{})),
-		Fields:               make(map[string]func(f *Factory) interface{}),
-		AfterBuildCallbacks:  make([]func(m interface{}), 0),
-		AfterCreateCallbacks: make([]func(m interface{}), 0),
+		Traits:               make(map[string]func(m any)),
+		Fields:               make(map[string]func(f *Factory) any),
+		AfterBuildCallbacks:  make([]func(m any), 0),
+		AfterCreateCallbacks: make([]func(m any), 0),
 	}
 }

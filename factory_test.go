@@ -2,11 +2,14 @@ package factorybot_test
 
 import (
 	. "factorybot"
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
+
+	"fmt"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-type MockStruct struct {
+type mockStruct struct {
 	AfterBuildSet  bool
 	AfterCreateSet bool
 	Persisted      bool
@@ -16,18 +19,22 @@ type MockStruct struct {
 	Name           string
 }
 
-var _ = Describe("Factory", func() {
-	mockFactory := NewFactory(&MockStruct{}).
-		AfterBuild(func(m interface{}) {
-			x := m.(*MockStruct)
+func TestFactory(t *testing.T) {
+	seq := NewSequence(func(n int) any {
+		return fmt.Sprintf("name%d", n)
+	})
+
+	f0 := NewFactory(&mockStruct{}).
+		AfterBuild(func(m any) {
+			x := m.(*mockStruct)
 			x.AfterBuildSet = true
 		}).
-		AfterCreate(func(m interface{}) {
-			x := m.(*MockStruct)
+		AfterCreate(func(m any) {
+			x := m.(*mockStruct)
 			x.AfterCreateSet = true
 		}).
 		Persist(func(m interface{}) {
-			x := m.(*MockStruct)
+			x := m.(*mockStruct)
 			x.Persisted = true
 		}).
 		Set("FieldToSet", func(f *Factory) interface{} {
@@ -41,91 +48,89 @@ var _ = Describe("Factory", func() {
 			case true:
 				return "other-name"
 			default:
-				return "name"
+				return seq.One()
 			}
 		}).
 		Trait("some trait", func(m interface{}) {
-			x := m.(*MockStruct)
+			x := m.(*mockStruct)
 			x.TraitInvoked = true
 		})
 
-	mockFactory1 := mockFactory.
+	f1 := f0.
 		Set("FieldToSet2", func(f *Factory) interface{} {
 			return true
 		}).
 		Trait("new trait", func(m interface{}) {
-			x := m.(*MockStruct)
+			x := m.(*mockStruct)
 			x.TraitInvoked = true
 		})
 
-	Describe("#Field", func() {
-		It("returns value of a field", func() {
-			f := mockFactory.SetT("SomeField", true)
-			Expect(f.Field("SomeField")).To(BeTrue())
-		})
+	t.Run("Field", func(t *testing.T) {
+		m1 := f0.Build().(*mockStruct)
+		m2 := f0.SetT("FieldToSet", false).Build().(*mockStruct)
+		require.True(t, m1.FieldToSet)
+		require.False(t, m2.FieldToSet)
 	})
 
-	Describe("#Build", func() {
-		It("invokes AfterBuild callback", func() {
-			m := mockFactory.Build()
-			_ = mockFactory1.Build()
-			Expect(m.(MockStruct).AfterBuildSet).To(BeTrue())
-		})
+	t.Run("Build", func(t *testing.T) {
+		m, ok := f0.Build().(*mockStruct)
+		require.True(t, ok)
+		require.True(t, m.AfterBuildSet)
 
-		It("invokes Trait callback", func() {
-			m := mockFactory.WithTrait("some trait").Build()
-			Expect(m.(MockStruct).TraitInvoked).To(BeTrue())
-		})
-
-		It("panices when invoked Trait is not defined", func() {
-			Expect(func() { mockFactory.WithTrait("missing trait").Build() }).To(Panic())
-		})
-
-		It("sets fields as defined in the factory", func() {
-			m := mockFactory.Build()
-			Expect(m.(MockStruct).FieldToSet).To(BeTrue())
-		})
-
-		It("accepts alternative value", func() {
-			m := mockFactory.SetT("FieldToSet", false).Build()
-			Expect(m.(MockStruct).FieldToSet).To(BeFalse())
-		})
-
-		It("works with transient fields", func() {
-			m := mockFactory.SetT("CustomizeName", true).Build()
-			Expect(m.(MockStruct).Name).To(Equal("other-name"))
-		})
-
-		It("works in composite factories", func() {
-			m := mockFactory.Build()
-			Expect(m.(MockStruct).FieldToSet2).To(BeFalse())
-
-			m1 := mockFactory1.Build()
-			Expect(m1.(MockStruct).FieldToSet2).To(BeTrue())
-		})
+		m1, _ := f0.Build().(*mockStruct)
+		require.NotEqual(t, m.Name, m1.Name)
 	})
 
-	Describe("#Create", func() {
-		It("invokes AfterCreate callback", func() {
-			m := mockFactory.WithTrait("some trait").Create()
-			Expect(m.(MockStruct).AfterBuildSet).To(BeTrue())
-			Expect(m.(MockStruct).AfterCreateSet).To(BeTrue())
-			Expect(m.(MockStruct).TraitInvoked).To(BeTrue())
-			Expect(m.(MockStruct).Persisted).To(BeTrue())
-		})
+	t.Run("Build/WithTrait", func(t *testing.T) {
+		m := f0.WithTrait("some trait").Build().(*mockStruct)
+		require.True(t, m.TraitInvoked)
 	})
 
-	Describe("#BuildList", func() {
-		It("generates multiple structs", func() {
-			ms := mockFactory.BuildList(5)
-			Expect(len(ms.([]MockStruct))).To(Equal(5))
-		})
+	t.Run("Build/WithTrait/Panic", func(t *testing.T) {
+		require.Panics(t, func() { f0.WithTrait("missing trait").Build() })
 	})
 
-	Describe("#CreateList", func() {
-		It("generates multiple structs", func() {
-			ms := mockFactory.CreateList(5)
-			Expect(len(ms.([]MockStruct))).To(Equal(5))
-		})
+	t.Run("Build/SetField", func(t *testing.T) {
+		m := f0.Build().(*mockStruct)
+		require.True(t, m.FieldToSet)
 	})
-})
+
+	t.Run("Build/SetField/Override", func(t *testing.T) {
+		m := f0.SetT("FieldToSet", false).Build().(*mockStruct)
+		require.False(t, m.FieldToSet)
+	})
+
+	t.Run("Build/SetField/Transient", func(t *testing.T) {
+		m := f0.SetT("CustomizeName", true).Build().(*mockStruct)
+		require.Equal(t, "other-name", m.Name)
+	})
+
+	t.Run("Build/CompositeFactory", func(t *testing.T) {
+		m0 := f0.Build().(*mockStruct)
+		require.False(t, m0.FieldToSet2)
+
+		m1 := f1.Build().(*mockStruct)
+		require.True(t, m1.FieldToSet2)
+	})
+
+	t.Run("Create", func(t *testing.T) {
+		m := f0.WithTrait("some trait").Create().(*mockStruct)
+
+		require.True(t, m.AfterBuildSet)
+		require.True(t, m.AfterCreateSet)
+		require.True(t, m.TraitInvoked)
+		require.True(t, m.Persisted)
+	})
+
+	t.Run("BuildList", func(t *testing.T) {
+		list, ok := f0.BuildList(5).([]*mockStruct)
+		require.True(t, ok)
+		require.Len(t, list, 5)
+	})
+
+	t.Run("CreateList", func(t *testing.T) {
+		list, ok := f0.CreateList(5).([]*mockStruct)
+		require.True(t, ok)
+		require.Len(t, list, 5)
+	})
+}
